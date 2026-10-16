@@ -1,0 +1,93 @@
+# agents.yaml
+# LangGraph 教材重构 Agent 声明式注册表
+# 规范对应 to_lang.md §3.1
+
+agents:
+  evidence_builder:
+    role: "建立不可变证据包：定位原文、转录、标记符号/公式/图表风险"
+    model: "claude-sonnet-4"
+    tools: [pdf_reader, image_cropper, file_writer]
+    reads: [raw_files]
+    writes: [sources]
+    prompt_file: "prompts/evidence_builder.md"
+
+  source_verifier:
+    role: "逐条核对转录与原始证据，标记 uncertain/disputed 与高风险对象核验人"
+    model: "claude-sonnet-4"
+    tools: [pdf_reader, image_cropper]
+    reads: [sources]
+    writes: [sources]
+    prompt_file: "prompts/source_verifier.md"
+
+  reading_auditor:
+    role: "模拟具备标称前置知识的试读者，逐节做独立阅读审计并打上防自学标签"
+    model: "claude-opus-4"
+    tools: [file_reader]
+    reads: [sources, raw_files]
+    writes: [diagnoses]
+    prompt_file: "prompts/reading_auditor.md"
+
+  structure_rebuilder:
+    role: "重建概念/技能/前置/误解四类节点与拓扑依赖边"
+    model: "claude-opus-4"
+    tools: [graph_store]
+    reads: [sources, diagnoses, nodes, edges]
+    writes: [nodes, edges]
+    prompt_file: "prompts/structure_rebuilder.md"
+
+  unit_designer:
+    role: "按能力闭环划分学习单元，制定可观察动词目标与完成标准"
+    model: "claude-sonnet-4"
+    tools: []
+    reads: [nodes, edges, diagnoses]
+    writes: [units]
+    prompt_file: "prompts/unit_designer.md"
+
+  writer:
+    role: "按最小单元结构撰写 good.md 单元正文，展开推理并处理边界"
+    model: "claude-opus-4"
+    tools: [file_writer, file_reader]
+    reads: [units, nodes, edges, sources, diagnoses]
+    writes: [good_md, units]
+    prompt_file: "prompts/writer.md"
+
+  task_author:
+    role: "为单元配置任务对象、分层提示、答案、错因分类、再练任务"
+    model: "claude-sonnet-4"
+    tools: [yaml_writer]
+    reads: [units, nodes, good_md]
+    writes: [tasks]
+    prompt_file: "prompts/task_author.md"
+
+  student_simulator:
+    role: "以多种学情 persona（基础扎实/中游/薄弱）独立试读 good.md，报告卡点与停滞"
+    model: "claude-opus-4"
+    tools: [file_reader]
+    reads: [good_md, tasks, units]
+    writes: [reviews]
+    prompt_file: "prompts/student_simulator.md"
+    ensemble: 3
+
+  arbiter:
+    role: "熔断仲裁：门禁反复失败时裁决继续修复、重排单元还是停止；不能豁免门禁"
+    model: "claude-opus-4"
+    tools: [file_reader, graph_store]
+    reads: [gate_results, retry_counts, nodes, units, sources]
+    writes: [stop_flag, units]
+    prompt_file: "prompts/arbiter.md"
+
+  evidence_fixer:
+    role: "处理来源门禁退回的不确定项，核查原版证据，禁止凭语境静默修正"
+    model: "claude-sonnet-4"
+    tools: [pdf_reader]
+    reads: [sources, gate_results]
+    writes: [sources]
+    prompt_file: "prompts/evidence_fixer.md"
+
+  converter_fixer:
+    role: "修复下游格式转换器中的公式、条件或定义漂移，确保内容与 good.md 守恒"
+    model: "claude-sonnet-4"
+    tools: [file_reader, file_writer]
+    reads: [good_md, gate_results]
+    writes: [good_md]
+    prompt_file: "prompts/converter_fixer.md"

@@ -1,0 +1,119 @@
+# gates.yaml
+# LangGraph 教材重构 门禁系统配置与强制路由表
+# 规范对应 to_lang.md §4.2, §4.3 与 to_upgrade.md §11.2
+
+settings:
+  max_retry: 3
+  stop_on_p0: true
+
+gates:
+  source_gate:
+    name: "source_gate"
+    description: "核查原始教材证据链完整性，禁止未核验或存疑的文字/公式流向下游"
+    next_stage: "diagnosis_stage"
+    checks:
+      - check_all_sources_verified
+      - check_high_risk_reviewed
+      - check_risks_have_actions
+    route_table:
+      uncertain_transcription: "evidence_fixer"
+      missing_reviewer: "evidence_fixer"
+      unhandled_risk: "evidence_fixer"
+      default: "evidence_fixer"
+
+  diagnosis_gate:
+    name: "diagnosis_gate"
+    description: "核查防自学诊断的证据自足性，要求每个标签必须含试读者实录与修复归属"
+    next_stage: "structure_stage"
+    checks:
+      - check_diagnoses_non_empty
+      - check_diagnosis_evidence_and_scope
+      - check_no_vague_reasons
+    route_table:
+      missing_evidence: "reading_auditor"
+      missing_scope: "reading_auditor"
+      vague_reason: "reading_auditor"
+      default: "reading_auditor"
+
+  dependency_gate:
+    name: "dependency_gate"
+    description: "纯图算法核对概念与前置的拓扑序，首次使用前依赖必须闭合，且全图无环"
+    next_stage: "pedagogy_stage"
+    checks:
+      - check_graph_acyclic
+      - check_dependencies_closure
+      - check_no_dangling_references
+    route_table:
+      cycle_detected: "structure_rebuilder"
+      unclosed_dependency: "structure_rebuilder"
+      dangling_reference: "structure_rebuilder"
+      default: "structure_rebuilder"
+
+  pedagogy_gate:
+    name: "pedagogy_gate"
+    description: "核查每个学习单元的最小结构完整性，消除显然跳步与不可观察目标"
+    next_stage: "feedback_stage"
+    checks:
+      - check_minimal_unit_sections
+      - check_observable_objectives
+      - check_no_obvious_step_skips
+    rubric: "prompts/rubrics/pedagogy_rubric.md"
+    route_table:
+      missing_sections: "writer"
+      unobservable_objectives: "unit_designer"
+      obvious_jump: "writer"
+      default: "writer"
+
+  feedback_gate:
+    name: "feedback_gate"
+    description: "核查任务对象的答案、分层提示、错因分析、再练任务与预期证据"
+    next_stage: "student_trial_stage"
+    checks:
+      - check_tasks_required_fields
+      - check_layered_hints
+      - check_expected_evidence_validity
+    route_table:
+      missing_task_fields: "task_author"
+      insufficient_hints: "task_author"
+      invalid_expected_evidence: "task_author"
+      default: "task_author"
+
+  student_trial_gate:
+    name: "student_trial_gate"
+    description: "多 persona 模拟试读卡点判定，严守保守偏置，任何复现卡点强制分类回流"
+    next_stage: "output_gate"
+    checks:
+      - check_trial_coverage
+      - check_no_stagnation
+      - check_review_decisions
+    route_table:
+      前置缺失: "structure_rebuilder"
+      解释断裂: "writer"
+      反馈不足: "task_author"
+      目标不清: "unit_designer"
+      default: "writer"
+
+  output_gate:
+    name: "output_gate"
+    description: "核查 good.md 与各下游格式（HTML/Cards/TeX）的数学公式、符号与定义一致性"
+    next_stage: "version_gate"
+    checks:
+      - check_good_md_non_empty
+      - check_formula_conservation
+    route_table:
+      formula_drift: "converter_fixer"
+      symbol_mismatch: "converter_fixer"
+      default: "converter_fixer"
+
+  version_gate:
+    name: "version_gate"
+    description: "发布门禁，核验全量门禁全绿轨迹、输入输出哈希与版本签名自洽"
+    next_stage: "release_manager"
+    checks:
+      - check_all_gates_passed
+      - check_hash_integrity
+      - check_task_bank_export_consistency
+    route_table:
+      unpassed_gates: "arbiter"
+      hash_failure: "arbiter"
+      default: "arbiter"

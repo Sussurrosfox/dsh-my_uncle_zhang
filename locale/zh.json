@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "my_uncle_zhang (LangGraph 自动化自学教材教研流水线)",
+    "description": "基于 LangGraph 状态机驱动的自学教材教研改写流水线，具备 8 个纯代码确定性门禁、单一真相图状态 (GraphState)、5 个独立业务子图与最小可交付包导出校验。"
+  }
+}

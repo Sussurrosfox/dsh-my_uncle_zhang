@@ -1,0 +1,18 @@
+# math.yaml
+discipline: "math"
+name: "数学学科扩展配置"
+extended_fields:
+  - "formula_tokens"
+  - "counterexamples"
+  - "proof_scaffolds"
+
+rules:
+  strictly_no_obviously: true
+  require_domain_boundary: true
+  definition_syntax_check: true
+
+prompt_patch: |
+  【数学学科特殊规范】
+  1. 涉及公式必须给出每个字母的集合归属与定义域（如 $x \in \mathbb{R}$）。
+  2. 严禁出现“显然”、“容易证明”字眼；证明过程必须拆分为编号命题或分步论证。
+  3. 每个新定义必须配备至少一个正例与一个反例（边界条件破坏时的情形）。

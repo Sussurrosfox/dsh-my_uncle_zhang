@@ -1,0 +1,18 @@
+# physics.yaml
+discipline: "physics"
+name: "物理学科扩展配置"
+extended_fields:
+  - "physical_units"
+  - "experimental_error"
+  - "idealized_assumptions"
+
+rules:
+  strictly_no_obviously: true
+  require_unit_consistency: true
+  require_model_boundaries: true
+
+prompt_patch: |
+  【物理学科特殊规范】
+  1. 所有物理量均须标明单位及矢量/标量属性。
+  2. 建立物理模型时必须并列写出理想化假设（如质点、匀强、忽略空气阻力）及其失效边界。
+  3. 实验数据必须包含测量误差分析与替代模型讨论。

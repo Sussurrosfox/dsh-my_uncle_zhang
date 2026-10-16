@@ -1,0 +1,30 @@
+{
+  "name": "my_uncle_zhang",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LangGraph 自动化自学教材教研流水线插件 (状态单一真相 + 8 确定性门禁 + 5 独立子图 + 最小可交付包导出)",
+  "icon": "./icon.svg",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "scripts",
+    "engine",
+    "README.md",
+    "SKILL.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

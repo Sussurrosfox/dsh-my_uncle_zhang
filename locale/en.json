@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "my_uncle_zhang (LangGraph Courseware Pipeline)",
+    "description": "LangGraph-driven self-study textbook reconstruction pipeline with 8 deterministic gates, single-truth graph state, 5 independent subgraphs, and verified release packaging."
+  }
+}

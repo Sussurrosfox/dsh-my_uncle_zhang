@@ -1,0 +1,5 @@
+- insert:
+    - id: my_uncle_zhang
+      name: 'my_uncle_zhang'
+      config:
+        pythonPath: 'python'
