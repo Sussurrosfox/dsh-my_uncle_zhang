@@ -33,44 +33,50 @@ from lang.subgraphs.sg5_feedback import build_sg5_subgraph
 # 6.2 stale 传播实现
 # =========================================================================
 
-def mark_stale(state: GraphState, source_ids: list[str]) -> dict[str, Any]:
+ALL_GATE_NAMES = [
+    "source_gate",
+    "diagnosis_gate",
+    "dependency_gate",
+    "pedagogy_gate",
+    "feedback_gate",
+    "student_trial_gate",
+    "output_gate",
+    # 注意：不给 version_gate 追加 stale 记录。
+]
+
+
+def mark_stale(state: GraphState, reason: str = "上游变更", affected_gates: list | None = None) -> dict[str, Any]:
+    """上游内容变更后的全量失效。
+    - 作废已签发 manifest（出口闸门 export_check 会重新校验）
+    - 向受影响 gate 追加显式失败记录，引导 router 走重验/修复回路
     """
-    to_lang.md §6.2: 当来源变更或发现事实错误时，
-    通过 source_refs 反查所有引用该 source_id 的节点、任务和学习单元，
-    批量向 gate_results 写入失效标记，强制后续门禁重测。
-    """
-    src_set = set(source_ids)
-    affected_nodes = [n for n in state.nodes if set(n.source_refs) & src_set]
-    affected_node_ids = {n.node_id for n in affected_nodes}
-    affected_tasks = [t for t in state.tasks if set(t.source_refs) & src_set]
-    stale_units = {t.unit_id for t in affected_tasks} | {
-        u.unit_id for u in state.units if set(u.node_refs) & affected_node_ids
-    }
+    from datetime import datetime, timezone
+    from lang.snapshot import compute_state_hash, compute_artifact_hashes
+    from lang.state import GateResult
 
-    if not stale_units:
-        return {}
-
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    stale_results = []
-    for g_name in ["pedagogy_gate", "feedback_gate", "student_trial_gate"]:
-        for u in stale_units:
-            stale_results.append(
-                GateResult(
-                    gate=g_name,
-                    passed=False,
-                    failures=[{
-                        "check": "stale_propagation",
-                        "target": u,
-                        "route_to": "writer",
-                        "msg": f"上游来源 {list(src_set)} 已变更，单元 {u} 处于 stale 状态，必须重新撰写与测试",
-                        "severity": "P1"
-                    }],
-                    decided_by="stale_engine",
-                    decided_at=now_str
-                )
-            )
-
-    return {"gate_results": stale_results}
+    gates = affected_gates or ALL_GATE_NAMES
+    now = datetime.now(timezone.utc).isoformat()
+    reason_str = reason if isinstance(reason, str) else f"来源已变更: {reason}"
+    stale_results = [
+        GateResult(
+            gate=g,
+            passed=False,
+            failures=[{
+                "check": "mark_stale",
+                "target": g,
+                "route_to": "default",
+                "msg": f"上游变更，需重新验证: {reason_str}",
+                "severity": "P1"
+            }],
+            decided_by="auto:stale",
+            decided_at=now,
+            build_id=getattr(state, "build_id", ""),
+            state_hash=compute_state_hash(state),
+            artifact_hashes=compute_artifact_hashes(state),
+        )
+        for g in gates
+    ]
+    return {"gate_results": stale_results, "manifest": None}
 
 
 # =========================================================================
@@ -82,6 +88,18 @@ def release_manager_node(state: GraphState) -> dict[str, Any]:
     版本签发节点：
     汇总全部 gate_results、复算输入输出哈希，签发 release_manifest。
     """
+    from lang.snapshot import compute_state_hash, RULESET_VERSION, EXECUTOR_VERSION
+    from lang.gates.deterministic import validate_gates_current, REQUIRED_GATES
+    from lang.state import ReleaseManifest
+
+    # 硬边界：发布前最后一次全量校验。任何一项不过 → 拒绝签发。
+    failures = validate_gates_current(state)
+    if failures:
+        return {"stop_flag": "release_blocked: " + "; ".join(failures)}
+
+    current = compute_state_hash(state)
+    build = getattr(state, "build_id", "")
+
     # 1. 计算输入原始文件哈希
     input_hashes = {}
     for raw_f in state.raw_files:
@@ -109,19 +127,39 @@ def release_manager_node(state: GraphState) -> dict[str, Any]:
     tool_versions = {
         "langgraph": lg_ver,
         "pydantic": getattr(pydantic, "__version__", "unknown"),
-        "pipeline_version": "1.0.0"
+        "ruleset_version": RULESET_VERSION,
+        "executor_version": EXECUTOR_VERSION,
+        "pipeline_version": "2.0.0"
     }
 
+    final_results = []
+    for gate_name in REQUIRED_GATES + ["version_gate"]:
+        valid = [
+            r for r in state.gate_results
+            if r.gate == gate_name and getattr(r, "build_id", "") == build
+            and getattr(r, "state_hash", "") == current and r.passed
+        ]
+        if valid:
+            final_results.append(valid[-1])
+
     manifest = ReleaseManifest(
-        version="v1.0.0-certified",
+        version=f"v2.0.0-{current[:8]}",
+        build_id=build,
+        state_hash=current,
         input_hashes=input_hashes,
         output_hashes=output_hashes,
         tool_versions=tool_versions,
-        gate_results=state.gate_results,
-        approver="release_manager:auto_certified"
+        gate_results=final_results,
+        approver="release_manager:auto"
     )
 
     return {"manifest": manifest}
+
+
+def task_render_node(state: GraphState) -> dict[str, Any]:
+    """正文占位符渲染节点：将 {{task:<id>}} 渲染为结构化自学练习区块"""
+    from lang.task_renderer import render_tasks_into_good_md
+    return {"good_md": render_tasks_into_good_md(state.good_md, state.tasks)}
 
 
 def stop_and_report_node(state: GraphState) -> dict[str, Any]:
@@ -193,10 +231,15 @@ def make_gate_router(gate: Gate, max_retry: int = 3) -> Callable[[GraphState], s
 
 
 def make_arbiter_router() -> Callable[[GraphState], str]:
-    """仲裁结果条件路由：若是停止则走 stop_and_report，否则走重排单元重试"""
+    """仲裁结果条件路由：若是停止则走 stop_and_report，若需全量重验证则走 sg1_source，否则走重排单元 unit_designer"""
     def router(state: GraphState) -> str:
         if state.stop_flag:
             return "stop_and_report"
+        from lang.gates.deterministic import validate_gates_current
+        errs = validate_gates_current(state, include_version_gate=False)
+        early_gates = ["source_gate", "diagnosis_gate", "dependency_gate"]
+        if any(any(eg in e for eg in early_gates) for e in errs):
+            return "sg1_source"
         return "unit_designer"
     return router
 
@@ -241,6 +284,7 @@ def build_main_graph(
         g.add_node("sg5_feedback", make_agent_node("task_author", registry))
 
     # 2. 注册主图测试与发布阶段节点
+    g.add_node("task_render", task_render_node)
     g.add_node("student_simulator", make_agent_node("student_simulator", registry))
     g.add_node("release_manager", release_manager_node)
     g.add_node("stop_and_report", stop_and_report_node)
@@ -258,9 +302,11 @@ def build_main_graph(
         ]
         repaired_ids = [sid for sid in repaired_ids if sid]
         if repaired_ids:
-            stale_patch = mark_stale(state, repaired_ids)
+            stale_patch = mark_stale(state, reason=f"evidence_fixer 修复来源: {repaired_ids}")
             if "gate_results" in stale_patch:
                 patch["gate_results"] = list(patch.get("gate_results", [])) + stale_patch["gate_results"]
+            if "manifest" in stale_patch:
+                patch["manifest"] = stale_patch["manifest"]
         return patch
 
     g.add_node("evidence_fixer", evidence_fixer_node)
@@ -363,7 +409,7 @@ def build_main_graph(
 
     # gate_feedback_gate
     gate_fb = get_gate("feedback_gate")
-    gate_fb.next_stage = "student_simulator"
+    gate_fb.next_stage = "task_render"
     g.add_conditional_edges(
         "gate_feedback_gate",
         make_gate_router(gate_fb, max_retry=max_retry),
@@ -371,9 +417,10 @@ def build_main_graph(
             "task_author": "task_author",
             "arbiter": "arbiter",
             "stop_and_report": "stop_and_report",
-            "student_simulator": "student_simulator"
+            "task_render": "task_render"
         }
     )
+    g.add_edge("task_render", "student_simulator")
     g.add_edge("student_simulator", "gate_student_trial_gate")
 
     # gate_student_trial_gate
@@ -426,7 +473,8 @@ def build_main_graph(
         make_arbiter_router(),
         {
             "stop_and_report": "stop_and_report",
-            "unit_designer": "unit_designer"
+            "unit_designer": "unit_designer",
+            "sg1_source": "sg1_source"
         }
     )
 

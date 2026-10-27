@@ -10,12 +10,27 @@ lang.gates.base
 
 from __future__ import annotations
 import datetime
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Union
 from pydantic import BaseModel, Field, ConfigDict
 from lang.state import GraphState, GateResult
 
 
-GateCheckFunc = Callable[[GraphState], list[dict[str, Any]]]
+class CheckFailures(list):
+    """同时兼容 list[dict] 和 CheckResult.passed / failures 接口"""
+    @property
+    def passed(self) -> bool:
+        return len(self) == 0
+
+    @property
+    def failures(self) -> list:
+        return list(self)
+
+    @property
+    def decision(self) -> str:
+        return "pass" if len(self) == 0 else "fail"
+
+
+GateCheckFunc = Callable[[GraphState], Union[list[dict[str, Any]], CheckFailures]]
 
 
 class Gate(BaseModel):
@@ -33,7 +48,14 @@ class Gate(BaseModel):
         """
         执行当前门禁的全量检查。
         先执行确定性代码检查，若配置了 rubric 且提供评审器，则执行补充评审。
+        结果注入构建快照绑定（阶段 A）：build_id / state_hash / 版本戳。
         """
+        from datetime import datetime, timezone
+        from lang.snapshot import (
+            RULESET_VERSION, EXECUTOR_VERSION,
+            compute_state_hash, compute_artifact_hashes,
+        )
+        started = datetime.now(timezone.utc).isoformat()
         all_failures: list[dict[str, Any]] = []
 
         # 1. 确定性检查（代码判定）
@@ -67,7 +89,7 @@ class Gate(BaseModel):
                     "severity": "P2"
                 })
 
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        finished = datetime.now(timezone.utc).isoformat()
         passed = (len(all_failures) == 0)
 
         return GateResult(
@@ -75,5 +97,12 @@ class Gate(BaseModel):
             passed=passed,
             failures=all_failures,
             decided_by="auto",
-            decided_at=now_str
+            decided_at=finished,
+            build_id=getattr(state, "build_id", ""),
+            state_hash=compute_state_hash(state),
+            artifact_hashes=compute_artifact_hashes(state),
+            ruleset_version=RULESET_VERSION,
+            executor_version=EXECUTOR_VERSION,
+            started_at=started,
+            finished_at=finished,
         )

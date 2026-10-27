@@ -15,6 +15,7 @@ import argparse
 import sqlite3
 import traceback
 import contextlib
+import hashlib
 from typing import Any
 
 # 1. 动态自适应寻址引擎路径
@@ -199,9 +200,23 @@ def action_gate(args) -> dict[str, Any]:
 
     gate_name = args.gate
     state_file = args.state_file
+    state_file_info: dict[str, str] = {}
 
-    if state_file and os.path.exists(state_file):
-        with open(state_file, "r", encoding="utf-8") as f:
+    if state_file:
+        if not os.path.exists(state_file):
+            print(json.dumps({
+                "success": False,
+                "error": f"state_file 不存在: {os.path.abspath(state_file)}",
+                "hint": "fail closed：拒绝在缺失状态文件上运行门禁",
+            }, ensure_ascii=False))
+            sys.exit(2)
+        abs_path = os.path.abspath(state_file)
+        with open(abs_path, "rb") as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+        state_file_info["state_file_abs"] = abs_path
+        state_file_info["state_file_sha256"] = file_hash
+
+        with open(abs_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         state = GraphState(**data)
     else:
@@ -233,11 +248,13 @@ def action_gate(args) -> dict[str, Any]:
             "decided_at": res.decided_at
         })
 
-    return {
+    resp = {
         "success": True,
         "all_passed": all_passed,
         "results": results
     }
+    resp.update(state_file_info)
+    return resp
 
 def action_test(args) -> dict[str, Any]:
     import pytest
@@ -263,7 +280,8 @@ def action_test(args) -> dict[str, Any]:
 
 def main():
     parser = argparse.ArgumentParser(description="LangGraph Courseware Bridge Runner")
-    parser.add_argument("--action", required=True, choices=["run", "resume", "status", "visualize", "gate", "test"])
+    parser.add_argument("cmd", nargs="?", default=None, choices=["run", "resume", "status", "visualize", "gate", "test"], help="动作命令")
+    parser.add_argument("--action", default=None, choices=["run", "resume", "status", "visualize", "gate", "test"])
     parser.add_argument("--project-root", default=None, help="项目根目录")
     parser.add_argument("--input", "-i", nargs="*", default=[], help="原始原材料文件")
     parser.add_argument("--discipline", "-d", default="math", choices=["math", "physics"])
@@ -277,6 +295,10 @@ def main():
     parser.add_argument("--json-output", action="store_true", default=True)
 
     args = parser.parse_args()
+    action = args.cmd or args.action
+    if not action:
+        parser.error("必须指定 action（例如: runner.py gate 或 runner.py --action gate）")
+    args.action = action
     setup_sys_path(args.project_root)
 
     dispatch = {

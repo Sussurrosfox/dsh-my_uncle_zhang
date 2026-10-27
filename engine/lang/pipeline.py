@@ -22,6 +22,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from lang.state import GraphState
 from lang.graph_builder import build_main_graph
 from lang.exporters import export_all, ExportVerificationError
+from lang.snapshot import new_build_id
 
 
 def get_default_output_dir(raw_files: list[str]) -> str:
@@ -43,12 +44,15 @@ def build_initial_state(
     output_dir: str | None = None
 ) -> dict[str, Any]:
     """构建主图启动初始状态字典"""
+    from lang.snapshot import new_build_id
+
     if not output_dir or output_dir in ("output", "release_deliverables"):
         output_dir = get_default_output_dir(raw_files)
 
     return {
         "raw_files": raw_files,
         "discipline": discipline,
+        "build_id": new_build_id(),
         "good_md_path": os.path.join(output_dir, "good.md"),
         "sources": [],
         "nodes": [],
@@ -74,7 +78,7 @@ def run_pipeline(
     thread_id: str = "run_001",
     resume: bool = False,
     max_retry: int = 3,
-    use_compiled_subgraphs: bool = True
+    use_compiled_subgraphs: bool = False
 ) -> dict[str, Any]:
     """
     运行或恢复自学教材重构流水线。

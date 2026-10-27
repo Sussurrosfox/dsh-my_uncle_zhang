@@ -13,11 +13,38 @@ from collections import defaultdict, deque
 from lang.state import GraphState
 
 
+class CheckFailures(list):
+    """同时兼容 list[dict] 和 CheckResult.passed / failures 接口"""
+    @property
+    def passed(self) -> bool:
+        return len(self) == 0
+
+    @property
+    def failures(self) -> list:
+        return list(self)
+
+    @property
+    def decision(self) -> str:
+        return "pass" if len(self) == 0 else "fail"
+
+
+# 版本门禁要求的内容 gate（version_gate 自身除外）
+REQUIRED_GATES = [
+    "source_gate",
+    "diagnosis_gate",
+    "dependency_gate",
+    "pedagogy_gate",
+    "feedback_gate",
+    "student_trial_gate",
+    "output_gate",
+]
+
+
 # =========================================================================
 # 1. 来源门禁 (source_gate) 检查
 # =========================================================================
 
-def check_all_sources_verified(state: GraphState) -> list[dict[str, Any]]:
+def check_all_sources_verified(state: GraphState) -> CheckFailures:
     """所有 source_node 的 transcription_status 必须为 verified。"""
     failures = []
     if not state.sources:
@@ -28,7 +55,7 @@ def check_all_sources_verified(state: GraphState) -> list[dict[str, Any]]:
             "msg": "来源证据包为空，未录入任何 source_node",
             "severity": "P0_stop"
         })
-        return failures
+        return CheckFailures(failures)
 
     for s in state.sources:
         if s.transcription_status != "verified":
@@ -39,10 +66,10 @@ def check_all_sources_verified(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"来源 {s.source_id} 状态为 '{s.transcription_status}'，尚未完成 verified 认证",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_high_risk_reviewed(state: GraphState) -> list[dict[str, Any]]:
+def check_high_risk_reviewed(state: GraphState) -> CheckFailures:
     """高风险对象（公式/符号/图/ risk != none）必须 100% 具备非空 reviewer。"""
     failures = []
     for s in state.sources:
@@ -54,10 +81,10 @@ def check_high_risk_reviewed(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"高风险条目 {s.source_id} (risk={s.risk}) 缺少责任审核人签署",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_risks_have_actions(state: GraphState) -> list[dict[str, Any]]:
+def check_risks_have_actions(state: GraphState) -> CheckFailures:
     """标记了 risk 的条目必须具备明确的处置记录（reviewed_at 非空）。"""
     failures = []
     for s in state.sources:
@@ -69,27 +96,27 @@ def check_risks_have_actions(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"风险条目 {s.source_id} 尚未登记处理时间戳 (reviewed_at 为空)",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
 # =========================================================================
 # 2. 诊断门禁 (diagnosis_gate) 检查
 # =========================================================================
 
-def check_diagnoses_non_empty(state: GraphState) -> list[dict[str, Any]]:
+def check_diagnoses_non_empty(state: GraphState) -> CheckFailures:
     """独立阅读审计记录不能为空。"""
     if not state.diagnoses:
-        return [{
+        return CheckFailures([{
             "check": "check_diagnoses_non_empty",
             "target": "diagnoses",
             "route_to": "missing_evidence",
             "msg": "防自学诊断记录列表为空，尚未进行独立阅读审计",
             "severity": "P1"
-        }]
-    return []
+        }])
+    return CheckFailures([])
 
 
-def check_diagnosis_evidence_and_scope(state: GraphState) -> list[dict[str, Any]]:
+def check_diagnosis_evidence_and_scope(state: GraphState) -> CheckFailures:
     """每条诊断记录必须包含具体的试读实录 evidence 与修复归属 fix_scope。"""
     failures = []
     for d in state.diagnoses:
@@ -109,10 +136,10 @@ def check_diagnosis_evidence_and_scope(state: GraphState) -> list[dict[str, Any]
                 "msg": f"诊断记录 {d.record_id} 修复归属 fix_scope 不合法: '{d.fix_scope}'",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_no_vague_reasons(state: GraphState) -> list[dict[str, Any]]:
+def check_no_vague_reasons(state: GraphState) -> CheckFailures:
     """诊断中禁止仅写抽象模糊套话如“学生不理解”。"""
     vague_phrases = ["学生不理解", "不明白", "看不懂", "不会做", "太难了"]
     failures = []
@@ -128,14 +155,14 @@ def check_no_vague_reasons(state: GraphState) -> list[dict[str, Any]]:
                     "severity": "P1"
                 })
                 break
-    return failures
+    return CheckFailures(failures)
 
 
 # =========================================================================
 # 3. 依赖门禁 (dependency_gate) 纯图算法检查
 # =========================================================================
 
-def check_graph_acyclic(state: GraphState) -> list[dict[str, Any]]:
+def check_graph_acyclic(state: GraphState) -> CheckFailures:
     """检测依赖网络是否存在环路（Kahn 拓扑排序算法）。"""
     failures = []
     node_ids = {n.node_id for n in state.nodes}
@@ -169,10 +196,10 @@ def check_graph_acyclic(state: GraphState) -> list[dict[str, Any]]:
             "msg": f"依赖网络中检测到循环依赖（拓扑排序节点数 {visited_count} < 节点总数 {len(node_ids)}）",
             "severity": "P0_stop"
         })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_dependencies_closure(state: GraphState) -> list[dict[str, Any]]:
+def check_dependencies_closure(state: GraphState) -> CheckFailures:
     """
     按单元正文阅读次序做依赖闭合拓扑检查：
     对于每条 from_id -> to_id 边，from_id 的首次出现必须严格先于或等于 to_id。
@@ -218,10 +245,10 @@ def check_dependencies_closure(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"前置依赖未闭合: 节点 '{to_node.node_id}'(单元 {to_node.first_use}) 依赖尚未被介绍的 '{from_node.node_id}'(单元 {from_node.first_use})",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_no_dangling_references(state: GraphState) -> list[dict[str, Any]]:
+def check_no_dangling_references(state: GraphState) -> CheckFailures:
     """检查 units 和 tasks 中引用的 node_refs 与 prerequisite_refs 是否全部存在。"""
     failures = []
     known_nodes = {n.node_id for n in state.nodes}
@@ -236,7 +263,7 @@ def check_no_dangling_references(state: GraphState) -> list[dict[str, Any]]:
                     "msg": f"单元 {u.unit_id} 引用了未定义的节点: '{ref}'",
                     "severity": "P1"
                 })
-    return failures
+    return CheckFailures(failures)
 
 
 # =========================================================================
@@ -256,17 +283,17 @@ OBSERVABLE_VERBS = [
 ]
 
 
-def check_minimal_unit_sections(state: GraphState) -> list[dict[str, Any]]:
+def check_minimal_unit_sections(state: GraphState) -> CheckFailures:
     """每个 unit 必须具备 §8.1 最小结构的 11 个必备区段（在 good_md 中存在标题对应）。"""
     failures = []
     if not state.good_md.strip():
-        return [{
+        return CheckFailures([{
             "check": "check_minimal_unit_sections",
             "target": "good_md",
             "route_to": "missing_sections",
             "msg": "good.md 正文为空，尚未撰写",
             "severity": "P1"
-        }]
+        }])
 
     text = state.good_md
     for sec in REQUIRED_SECTIONS:
@@ -280,10 +307,10 @@ def check_minimal_unit_sections(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"正文中缺少 §8.1 必备区段: 【{sec}】",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_observable_objectives(state: GraphState) -> list[dict[str, Any]]:
+def check_observable_objectives(state: GraphState) -> CheckFailures:
     """每个 unit 的 objectives 必须包含至少一个可观察行为动词。"""
     failures = []
     for u in state.units:
@@ -307,10 +334,10 @@ def check_observable_objectives(state: GraphState) -> list[dict[str, Any]]:
                     "msg": f"单元 {u.unit_id} 目标 '{obj}' 未使用可观察行为动词（建议使用: 指出/判定/计算/证明/构造等）",
                     "severity": "P1"
                 })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_no_obvious_step_skips(state: GraphState) -> list[dict[str, Any]]:
+def check_no_obvious_step_skips(state: GraphState) -> CheckFailures:
     """检查正文及单元小节中是否包含“显然”、“容易证明”等偷懒跳步词。"""
     forbidden_words = ["显然", "容易证明", "容易看出", "不难证明", "读者自证"]
     failures = []
@@ -329,24 +356,24 @@ def check_no_obvious_step_skips(state: GraphState) -> list[dict[str, Any]]:
                     "severity": "P1"
                 })
                 break
-    return failures
+    return CheckFailures(failures)
 
 
 # =========================================================================
 # 5. 反馈门禁 (feedback_gate) 检查
 # =========================================================================
 
-def check_tasks_required_fields(state: GraphState) -> list[dict[str, Any]]:
+def check_tasks_required_fields(state: GraphState) -> CheckFailures:
     """检查 Task 的必填字段：answer, worked_solution, common_errors, error_reasons, retry_task。"""
     failures = []
     if not state.tasks:
-        return [{
+        return CheckFailures([{
             "check": "check_tasks_required_fields",
             "target": "tasks",
             "route_to": "missing_task_fields",
             "msg": "任务库 tasks 为空，未配置任何练习",
             "severity": "P1"
-        }]
+        }])
 
     for t in state.tasks:
         missing = []
@@ -364,10 +391,10 @@ def check_tasks_required_fields(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"任务 {t.task_id} 缺失必填反馈字段: {', '.join(missing)}",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_layered_hints(state: GraphState) -> list[dict[str, Any]]:
+def check_layered_hints(state: GraphState) -> CheckFailures:
     """检查 Task 必须包含分层提示：hint_1, hint_2, hint_3 均非空。"""
     failures = []
     for t in state.tasks:
@@ -379,10 +406,10 @@ def check_layered_hints(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"任务 {t.task_id} 未配齐三层提示 (hint_1/hint_2/hint_3 存在空值)",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_expected_evidence_validity(state: GraphState) -> list[dict[str, Any]]:
+def check_expected_evidence_validity(state: GraphState) -> CheckFailures:
     """检查 expected_evidence 非空且不是“仅最终数值”等不可诊断形式。"""
     invalid_patterns = ["仅最终数值", "数值", "数字", "答案", "选A", "选B", "选C", "选D"]
     failures = []
@@ -396,14 +423,14 @@ def check_expected_evidence_validity(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"任务 {t.task_id} 的 expected_evidence 不合格 ('{ev}')，必须说明具体可检查的中间过程",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
 # =========================================================================
 # 6. 试读门禁 (student_trial_gate) 检查
 # =========================================================================
 
-def check_trial_coverage(state: GraphState) -> list[dict[str, Any]]:
+def check_trial_coverage(state: GraphState) -> CheckFailures:
     """检查试读记录覆盖率：所有 units 是否都有 student_trial 记录。"""
     failures = []
     reviewed_units = {r.target for r in state.reviews if r.kind == "student_trial"}
@@ -416,10 +443,10 @@ def check_trial_coverage(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"单元 {u.unit_id} 缺少学生试读覆盖记录",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_no_stagnation(state: GraphState) -> list[dict[str, Any]]:
+def check_no_stagnation(state: GraphState) -> CheckFailures:
     """
     检查卡点记录：
     - 若任一 persona 出现卡点，按类别路由修复（前置缺失/解释断裂/反馈不足/目标不清）。
@@ -452,10 +479,10 @@ def check_no_stagnation(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"试读记录发现卡点 [{sp}] (复现次数: {stuck_counter[sp]})",
                 "severity": severity
             })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_review_decisions(state: GraphState) -> list[dict[str, Any]]:
+def check_review_decisions(state: GraphState) -> CheckFailures:
     """若有任何试读结论为 reject 或 revise，判定为门禁未通过。"""
     failures = []
     for r in state.reviews:
@@ -467,27 +494,27 @@ def check_review_decisions(state: GraphState) -> list[dict[str, Any]]:
                 "msg": f"试读者 {r.reviewer} 对目标 {r.target} 给出 '{r.decision}' 判定",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)
 
 
 # =========================================================================
 # 7. 输出门禁 (output_gate) 检查
 # =========================================================================
 
-def check_good_md_non_empty(state: GraphState) -> list[dict[str, Any]]:
+def check_good_md_non_empty(state: GraphState) -> CheckFailures:
     """正文必须非空且达到基础篇幅。"""
     if not state.good_md or len(state.good_md.strip()) < 100:
-        return [{
+        return CheckFailures([{
             "check": "check_good_md_non_empty",
             "target": "good_md",
             "route_to": "default",
             "msg": "good.md 正文内容过短或为空",
             "severity": "P1"
-        }]
-    return []
+        }])
+    return CheckFailures([])
 
 
-def check_formula_conservation(state: GraphState) -> list[dict[str, Any]]:
+def check_formula_conservation(state: GraphState) -> CheckFailures:
     """检查正文中的数学公式定界符成对守恒（$ 与 $$）。"""
     failures = []
     text = state.good_md
@@ -512,51 +539,58 @@ def check_formula_conservation(state: GraphState) -> list[dict[str, Any]]:
             "msg": f"检测到行间公式定界符 '$$' 未成对闭合 (出现 {double_dollar_count} 次)",
             "severity": "P1"
         })
-    return failures
+    return CheckFailures(failures)
 
 
 # =========================================================================
 # 8. 版本门禁 (version_gate) 检查
 # =========================================================================
 
-def check_all_gates_passed(state: GraphState) -> list[dict[str, Any]]:
-    """
-    核验发布前全部关键阶段的门禁历史：
-    source_gate, dependency_gate, pedagogy_gate, feedback_gate, student_trial_gate, output_gate
-    的最新一次结果必须全部为 passed == True。
-    """
-    failures = []
-    required_gates = [
-        "source_gate", "dependency_gate", "pedagogy_gate",
-        "feedback_gate", "student_trial_gate", "output_gate"
-    ]
-    # 获取每个门禁的最新状态
-    latest_by_gate: dict[str, bool] = {}
-    for gr in state.gate_results:
-        latest_by_gate[gr.gate] = gr.passed
+def validate_gates_current(state, include_version_gate: bool = True) -> list[str]:
+    """返回当前构建快照下的门禁有效性错误列表；空列表 = 全部有效。
 
-    for g_name in required_gates:
-        status = latest_by_gate.get(g_name)
-        if status is None:
-            failures.append({
-                "check": "check_all_gates_passed",
-                "target": g_name,
-                "route_to": "unpassed_gates",
-                "msg": f"发布前置门禁 '{g_name}' 从未执行",
-                "severity": "P0_stop"
-            })
-        elif not status:
-            failures.append({
-                "check": "check_all_gates_passed",
-                "target": g_name,
-                "route_to": "unpassed_gates",
-                "msg": f"发布前置门禁 '{g_name}' 最近一次结果为未通过 (passed=False)",
-                "severity": "P0_stop"
-            })
+    有效性定义（fail closed，三条件缺一不可）：
+      1. build_id 与当前 state.build_id 一致（排除跨构建混入）
+      2. state_hash 与当前内容快照一致（排除内容变更后的旧记录）
+      3. 满足 1+2 的记录中，最新一条 passed=True
+    """
+    from lang.snapshot import compute_state_hash
+
+    failures = []
+    current = compute_state_hash(state)
+    build = getattr(state, "build_id", "")
+    target_gates = REQUIRED_GATES + (["version_gate"] if include_version_gate else [])
+    for gate_name in target_gates:
+        valid = [
+            r for r in state.gate_results
+            if r.gate == gate_name and r.build_id == build and r.state_hash == current
+        ]
+        if not valid:
+            failures.append(f"{gate_name} 没有对当前构建快照的有效执行记录")
+            continue
+        if not valid[-1].passed:
+            failures.append(
+                f"{gate_name} 对当前快照的最新结果为失败: {valid[-1].failures}"
+            )
     return failures
 
 
-def check_hash_integrity(state: GraphState) -> list[dict[str, Any]]:
+def check_all_gates_passed(state: GraphState) -> CheckFailures:
+    """核验发布前全部关键阶段的门禁历史在当前快照下均通过。"""
+    errs = validate_gates_current(state, include_version_gate=False)
+    failures = []
+    for err in errs:
+        failures.append({
+            "check": "check_all_gates_passed",
+            "target": "version_gate",
+            "route_to": "unpassed_gates",
+            "msg": err,
+            "severity": "P1"
+        })
+    return CheckFailures(failures)
+
+
+def check_hash_integrity(state: GraphState) -> CheckFailures:
     """核验输出正文哈希可复算。"""
     failures = []
     if not state.good_md:
@@ -567,10 +601,10 @@ def check_hash_integrity(state: GraphState) -> list[dict[str, Any]]:
             "msg": "正文内容为空，无法计算有效哈希指纹",
             "severity": "P1"
         })
-    return failures
+    return CheckFailures(failures)
 
 
-def check_task_bank_export_consistency(state: GraphState) -> list[dict[str, Any]]:
+def check_task_bank_export_consistency(state: GraphState) -> CheckFailures:
     """检查正文中提及的所有任务 task_id 必须存在于 tasks 任务库中。"""
     failures = []
     known_task_ids = {t.task_id for t in state.tasks}
@@ -585,4 +619,4 @@ def check_task_bank_export_consistency(state: GraphState) -> list[dict[str, Any]
                 "msg": f"正文中引用的任务 '{tid}' 未在 task-bank 中登记",
                 "severity": "P1"
             })
-    return failures
+    return CheckFailures(failures)

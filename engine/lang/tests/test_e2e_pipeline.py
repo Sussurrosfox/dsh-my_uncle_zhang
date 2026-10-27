@@ -12,6 +12,7 @@ from lang.pipeline import run_pipeline, build_initial_state
 from lang.graph_builder import build_main_graph
 from lang.state import DependencyEdge, ConceptNode, GateResult
 from lang.exporters import export_all, export_check, ExportVerificationError
+from lang.snapshot import compute_state_hash
 
 
 @pytest.fixture
@@ -46,8 +47,11 @@ def test_e2e_pipeline_golden_path(tmp_output_dir, tmp_checkpoint_db):
     assert result["success"] is True
     assert result["status"] == "certified"
     final_state = result["state"]
-    assert final_state.manifest is not None
-    assert final_state.manifest.approver.startswith("release_manager")
+    state = final_state
+    assert state.manifest is not None
+    assert state.manifest.approver.startswith("release_manager")
+    assert state.manifest.version.startswith("v2.0.0-")
+    assert state.manifest.state_hash == compute_state_hash(state)
 
     # 验证输出目录中的必要制品
     expected_files = [

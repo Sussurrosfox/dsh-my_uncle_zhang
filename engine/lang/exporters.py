@@ -11,6 +11,8 @@ import os
 import hashlib
 from typing import Any
 from lang.state import GraphState, ReleaseManifest
+from lang.snapshot import compute_state_hash
+from lang.gates.deterministic import validate_gates_current
 
 
 class ExportVerificationError(Exception):
@@ -35,28 +37,47 @@ def _ensure_state_obj(state: GraphState | dict[str, Any]) -> GraphState:
 def export_check(state: GraphState | dict[str, Any]) -> None:
     """
     to_lang.md §13 导出前置校验：
-    1. 确认 state.manifest 不为空且 approver 字段有效；
-    2. 确认所有必须文件均有数据可写。
+    1. 确认 state.manifest 不为空且快照一致；
+    2. 校验所有门禁有效性；
+    3. 确认所有必须文件均有数据可写。
     """
     st = _ensure_state_obj(state)
+    m = st.manifest
+    if m is None:
+        raise ExportVerificationError("无 manifest，拒绝导出")
 
-    if not st.manifest:
-        raise ExportVerificationError("state.manifest 为空，流水线未正式通过版本签发！")
+    errors: list[str] = []
+    current = compute_state_hash(st)
 
-    if not st.manifest.approver or not st.manifest.approver.strip():
-        raise ExportVerificationError("state.manifest.approver 字段无效！")
+    if getattr(m, "state_hash", "") != current:
+        errors.append("manifest.state_hash 与当前内容快照不一致")
+    if getattr(m, "build_id", "") != getattr(st, "build_id", ""):
+        errors.append("manifest.build_id 与 state.build_id 不一致")
 
+    errors.extend(validate_gates_current(st))
+
+    for r in m.gate_results:
+        if not r.passed:
+            errors.append(f"manifest 内含未通过记录: {r.gate}")
+        if getattr(r, "state_hash", "") != current:
+            errors.append(f"manifest 内 {r.gate} 记录快照过期")
+        if getattr(r, "build_id", "") != getattr(st, "build_id", ""):
+            errors.append(f"manifest 内 {r.gate} 记录跨构建")
+
+    # 保留原有对 good_md / nodes / tasks 的非空检查
+    if not getattr(m, "approver", "").strip():
+        errors.append("state.manifest.approver 字段无效！")
     if not st.good_md or not st.good_md.strip():
-        raise ExportVerificationError("state.good_md 为空，无有效教材正文！")
-
+        errors.append("state.good_md 为空，无有效教材正文！")
     if not st.nodes:
-        raise ExportVerificationError("state.nodes 为空，概念图数据缺失！")
-
+        errors.append("state.nodes 为空，概念图数据缺失！")
     if not st.tasks:
-        raise ExportVerificationError("state.tasks 为空，任务题库缺失！")
-
+        errors.append("state.tasks 为空，任务题库缺失！")
     if not st.gate_results:
-        raise ExportVerificationError("state.gate_results 为空，门禁报告缺失！")
+        errors.append("state.gate_results 为空，门禁报告缺失！")
+
+    if errors:
+        raise ExportVerificationError("; ".join(errors))
 
 
 def export_all(state: GraphState | dict[str, Any], output_dir: str) -> dict[str, str]:

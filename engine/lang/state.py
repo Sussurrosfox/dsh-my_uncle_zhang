@@ -58,14 +58,15 @@ class Task(BaseModel):
     task_id: str
     unit_id: str
     source_refs: list[str] = Field(default_factory=list)
-    objective: str
+    objective: str = ""
     task_type: Literal[
         "observe", "classify", "compute", "explain",
-        "prove", "model", "transfer", "diagnose"
-    ]
-    prompt: str
+        "prove", "model", "transfer", "diagnose",
+        "迁移", "即时核验", "变式"
+    ] = "即时核验"
+    prompt: str = ""
     prerequisite_refs: list[str] = Field(default_factory=list)
-    expected_evidence: str               # 可检查的中间产物（不能仅为最终数值）
+    expected_evidence: str = ""               # 可检查的中间产物（不能仅为最终数值）
     answer: str = ""
     worked_solution: str = ""
     common_errors: list[str] = Field(default_factory=list)
@@ -74,6 +75,9 @@ class Task(BaseModel):
     hint_2: str = ""                     # 2. 结构提示
     hint_3: str = ""                     # 3. 局部提示
     retry_task: str = ""                 # 重新尝试或变式任务
+    retry_prompt: str = ""               # 再练题面（兼容别名）
+    retry_answer: str = ""               # 再练题的答案（阶段 E 新增，F-04 修复）
+    transfer_of: str = ""                # 若为迁移题，记录其承接的源任务/桥接 ID（阶段 H）
     boundary_note: str = ""
 
 
@@ -103,6 +107,16 @@ class DiagnosisRecord(BaseModel):
     fix_scope: Literal["正文", "下游互动系统"] = "正文"
 
 
+class TaskAttempt(BaseModel):
+    """学生试读中单次任务作答记录（阶段 F 新增，防模板化试读）"""
+    task_id: str                         # 实际作答的任务 ID
+    submitted_answer: str                # 模拟学生独立提交的答案（禁止先读答案）
+    hint_level_used: int = 0             # 0=未用提示；1/2/3=用到第几层
+    evidence_anchor: str = ""            # 正文锚点：good_md 中 ≥10 字符的原文引用
+    first_attempt_correct: bool = False
+    decision_reason: str = ""            # 判定理由（≥10 字符）
+
+
 class ReviewRecord(BaseModel):
     """review_record：试读与审阅记录"""
     reviewer: str                        # "student_sim:<persona>" / "teacher_rubric" / agent_id
@@ -112,6 +126,7 @@ class ReviewRecord(BaseModel):
     stuck_points: list[str] = Field(default_factory=list)
     decision: Literal["pass", "revise", "reject"] = "revise"
     created_at: str = ""
+    attempts: list[TaskAttempt] = Field(default_factory=list)   # 阶段 F 新增
 
 
 class GateResult(BaseModel):
@@ -122,6 +137,14 @@ class GateResult(BaseModel):
     # failures[i] 示例: {"check": "...", "target": "node_x", "route_to": "structure_rebuilder", "msg": "...", "severity": "P1"}
     decided_by: str = "auto"             # auto | arbiter
     decided_at: str = ""
+    # —— 快照绑定（阶段 A 新增）——
+    build_id: str = ""
+    state_hash: str = ""
+    artifact_hashes: dict = Field(default_factory=dict)
+    ruleset_version: str = ""
+    executor_version: str = ""
+    started_at: str = ""
+    finished_at: str = ""
 
 
 class ReleaseManifest(BaseModel):
@@ -132,6 +155,9 @@ class ReleaseManifest(BaseModel):
     tool_versions: dict[str, str] = Field(default_factory=dict)
     gate_results: list[GateResult] = Field(default_factory=list)
     approver: str = ""
+    # —— 快照绑定（阶段 A 新增）——
+    build_id: str = ""
+    state_hash: str = ""
 
 
 # =========================================================================
@@ -219,6 +245,7 @@ class GraphState(BaseModel):
 
     # 4. 门禁与流转控制
     current_stage: str = "sg1_source"
+    build_id: str = ""                                       # 阶段 A 新增：本次构建 ID（不挂 reducer）
     gate_results: Annotated[list[GateResult], operator.add] = Field(default_factory=list)
     retry_counts: Annotated[dict[str, int], merge_retry_counts] = Field(default_factory=dict)
     stop_flag: Optional[str] = None                          # 触发停止条件时置位（例如 "P0_stop" 或 arbiter 判定）
